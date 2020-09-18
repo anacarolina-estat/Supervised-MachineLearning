@@ -1,0 +1,309 @@
+---
+title: "Atividade - Workshop Aprendizado de Máquina"
+author: "Ana Carolina Alves Oliveira "
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.height = 4, fig.width = 7)
+
+options(digits = 4)
+```
+
+# Reconhecimento do gênero através da voz
+
+O objetivo é identificar o gênero através da voz. O conjunto de dados consiste de 3168 amostras de gravações de vozes, coletadas de voluntários masculinos e femininos. As gravações foram pre-processadas usando o software R e as bibliotecas `seewave` e `tuneR`.
+
+Artigo com análise do conjunto de dados: [Identifying the Gender of a Voice using Machine Learning](http://www.primaryobjects.com/2016/06/22/identifying-the-gender-of-a-voice-using-machine-learning/)
+
+## Conjunto de dados
+
+O conjunto de dados `vozes.csv` contém as seguintes variáveis:
+
+* meanfreq: mean frequency (in kHz)
+* sd: standard deviation of frequency
+* median: median frequency (in kHz)
+* Q25: first quantile (in kHz)
+* Q75: third quantile (in kHz)
+* IQR: interquantile range (in kHz)
+* skew: skewness 
+* kurt: kurtosis 
+* sp.ent: spectral entropy
+* sfm: spectral flatness
+* mode: mode frequency
+* centroid: frequency centroid 
+* peakf: peak frequency (frequency with highest energy)
+* meanfun: average of fundamental frequency measured across acoustic signal
+* minfun: minimum fundamental frequency measured across acoustic signal
+* maxfun: maximum fundamental frequency measured across acoustic signal
+* meandom: average of dominant frequency measured across acoustic signal
+* mindom: minimum of dominant frequency measured across acoustic signal
+* maxdom: maximum of dominant frequency measured across acoustic signal
+* dfrange: range of dominant frequency measured across acoustic signal
+* modindx: modulation index. Calculated as the accumulated absolute difference between adjacent measurements of fundamental frequencies divided by the frequency rang
+* label: male or female
+
+
+```{r}
+# Carregando os dados no R:
+voice <- read.csv("vozes.csv")
+```
+
+```{r}
+# Análise Exploratória 
+dim(voice)
+str(voice)
+summary(voice)
+table(voice$label)
+```
+
+### Separando o conjunto de dados: treinamento e teste
+```{r}
+library(caret)
+# 75% treinamento 25% teste
+# comando retorna índices das linhas que foram selecionadas para o treinamento
+
+set.seed(1234)
+index <- createDataPartition(voice$label, p = 0.75, list = FALSE)
+
+test <- voice[-index, ]
+train <- voice[index, ]
+
+Xtrain <- train[ , 1:20] # 20 primeiras colunas são os preditores
+Ytrain <- train$label # a variável label é a resposta
+```
+
+```{r, echo=FALSE}
+library(RColorBrewer)
+mypar <- function(a=1, b=1, brewer.n=8, brewer.name="Dark2", bycol=FALSE){
+ par(mar = c(2.5, 2.1, 1, 1), mgp = c(1.25, .5, 0))
+ #Sys.putenv(R_GSCMD="/usr/bin/gs")
+ if (!bycol){
+   par(mfrow=c(a, b))
+ }else{
+   par(mfcol=c(a, b))
+ }
+ palette(brewer.pal(brewer.n, brewer.name))
+}
+```
+
+#### Gráfico de dispersão entre os pares de preditores.
+```{r, fig.width=12, fig.height=12}
+library(ggcorrplot)
+
+corMatrix <- cor(Xtrain)   # Correlação entre as variáveis 
+ggcorrplot(corMatrix, hc.order = TRUE, type = "lower", lab = TRUE)
+```
+
+
+## Algoritmos de Classificação (usando o pacote `caret`)
+
+### Regressão Logística
+
+```{r}
+library(caret)
+control <- trainControl(method = "cv", number=10)  # método de validação cruzada (dividindo o conjunto em 10 partes)
+lr.fit <- train(label ~ ., data=train, 
+                method="glm", 
+                family="binomial",
+                trControl = control, 
+                metric="Accuracy")
+
+# proporcão de vezes que o modelo foi ajustado certo 
+lr.fit
+```
+
+Matriz de confusão e acurácia:
+```{r}
+lr.pred <- predict(lr.fit, newdata = test) # ajustando o modelo nos 25% de dados que o algoritmo tinha guardado
+
+cm.lr <- confusionMatrix(lr.pred, test$label)
+
+# Matriz de confusão
+cm.lr$table
+
+# Acurácia
+cm.lr$overall[1]  # propoção do quanto o modelo foi ajustado correto 
+```
+
+
+### KNN - Vizinhos mais Próximos
+
+```{r}
+control <- trainControl(method="cv", number=10, search="grid")  # conjunto de dados dividido em 5
+
+kgrid <- data.frame(k=4:20)   #estimando o num de vizinhos 
+
+set.seed(99999)
+model.knn <- train(label ~ ., data = train, method = "knn",
+                 preProcess=c("center", "scale"),
+                 tuneGrid=kgrid, 
+                 trControl = control)
+
+model.knn
+```
+
+Gráfico para a escolha do mehor valor de $k$.
+```{r}
+plot(model.knn, pch=19, lwd=2, cex=1.3)
+```
+
+Matriz de confusão e acurácia.
+```{r}
+prediction.knn <- predict(model.knn, test)
+cm.knn <- caret::confusionMatrix(prediction.knn, test$label)
+cm.knn$table
+cm.knn$overall[1]
+```
+
+
+#### LDA (Análise Discriminante Linear)
+
+```{r}
+# Usaremos validação cruzada com 10 dobras
+control <- trainControl(method="cv", number=10)
+
+model.lda <- train(label ~. , data=train, method="lda", 
+                   metric = "Accuracy", trControl=control)
+
+model.lda
+```
+
+```{r}
+## Verificar quais preditores tem correlação muito alta
+highCor = which(corMatrix > 0.95, arr.ind = TRUE)
+highCor = highCor[highCor[, 1] != highCor[, 2], ]
+
+apply(highCor, 2, function(i) names(Xtrain)[i])
+
+## Excluir os preditores que são colineares
+library(dplyr)
+train2 = train %>% select(-centroid, -kurt, - dfrange)
+
+## Executar 
+model.lda <- train(label ~. , data=train2, method="lda", 
+                   metric = "Accuracy", trControl=control)
+model.lda
+
+prediction.lda <- predict(model.lda, test) # predição
+
+# Matriz de confusão
+cm.lda <- caret::confusionMatrix(prediction.lda, test$label)
+
+cm.lda$table
+cm.lda$overall[1]
+```
+
+
+Comparando PCA com LDA:
+```{r}
+Xtrain <- train[ , 1:20] # 20 primeiras colunas são os preditores
+Ytrain <- as.numeric(train$label) # a variável label é a resposta
+
+PC <- prcomp(Xtrain)
+
+library(fpc)
+
+# Canonica - Fisher
+dcf <- discrcoord(Xtrain, Ytrain)
+
+mypar(1, 2, bycol=TRUE)
+
+plot(dcf$proj[, 1:2], col = Ytrain, 
+     xlab="First Canonical Direction",
+     ylab="Second Canonical Direction") # apenas as 2 primeiras canonicas
+legend("topright", c("female","male"), col=1:2, lty=1, lwd=2, bty="n")
+
+plot(PC$x[, 2] ~ PC$x[, 1], col=Ytrain,
+     xlab="First Principal Component",
+     ylab="Second Principal Component")
+legend("bottomleft", c("female", "male"), col=1:2, lty=1, lwd=2, bty="n")
+```
+
+
+#### Naive Bayes 
+
+```{r}
+library(naivebayes)
+model.nb <- naive_bayes(label ~. , data=train, 
+                        metric=metric, trControl=control)
+
+prediction.nb <- predict(model.nb, test)
+cm.nb <- caret::confusionMatrix(prediction.nb, test$label)
+
+cm.nb$table
+
+cm.nb$overall[1]
+```
+
+
+#### CART - Árvore de Classificação
+
+```{r}
+control <- trainControl(method="cv", number=10)
+model.rpart <- train(label ~., data=train, method="rpart", 
+                     metric="Accuracy", trControl=control)
+
+prediction.rpart <- predict(model.rpart, test)
+
+cm.rpart <- confusionMatrix(prediction.rpart, test$label)
+
+cm.rpart$table
+
+cm.rpart$overall[1]
+
+library(rpart.plot)
+rpart.plot(model.rpart$finalModel, type = 5)
+```
+
+
+#### Random Forest 
+
+```{r}
+library(randomForest)
+control <- trainControl(method="cv", number=10)
+model.rf <- train(label ~., data=train, method="rf", 
+                  metric="Accuracy", trControl=control)
+
+model.rf
+
+prediction.rf <- predict(model.rf, test)
+
+cm.rf <- confusionMatrix(prediction.rf, test$label)
+
+cm.rf$table
+
+cm.rf$overall[1]
+```
+
+```{r, echo=FALSE}
+names <- c("Logistic Regression", "K-Nearest Neighbor", 
+           "Linear Discriminant Analysis", "Naive Bayes", 
+           "Classification Tree", "Random Forest")
+
+accuracies <- round(c(cm.lr$overall[1],
+                      cm.knn$overall[1], 
+                      cm.lda$overall[1],
+                      cm.nb$overall[1],
+                      cm.rpart$overall[1],
+                      cm.rf$overall[1]), 4)
+
+accuratemodels <- data.frame(Name = names, Accuracy = accuracies)
+```
+
+
+### Acurácia dos modelos
+
+```{r, echo=FALSE}
+library(DT)
+datatable(accuratemodels)
+
+ggplot(accuratemodels, aes(reorder(Name, Accuracy), Accuracy)) +
+  geom_bar(stat = "identity", fill = "darkred") +
+  coord_flip() +
+  labs(x = "Classifiers", y = "Accuracy", title = "Which classifier gives the best accuracy?")
+
+```
